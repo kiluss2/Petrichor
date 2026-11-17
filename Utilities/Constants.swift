@@ -305,6 +305,8 @@ extension Notification.Name {
     static let libraryDataDidChange = Notification.Name("LibraryDataDidChange")
     static let smartPlaylistPersistenceDidFinish = Notification.Name("SmartPlaylistPersistenceDidFinish")
     static let goToLibraryFilter = Notification.Name("GoToLibraryFilter")
+    /// Opens a `HomeDetailTarget` (userInfo "target") in Home's detail page.
+    static let showHomeDetail = Notification.Name("ShowHomeDetail")
 
     static let selectPlaylist = Notification.Name("SelectPlaylist")
     static let importPlaylists = Notification.Name("ImportPlaylists")

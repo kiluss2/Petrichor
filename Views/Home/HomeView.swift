@@ -11,11 +11,14 @@ enum AlbumSortOption: String, Codable {
 enum HomeDetailTarget: Identifiable, Equatable {
     case entity(any Entity)
     case playlist(UUID)
+    /// An album of play queue tracks opened from Finder, which the library doesn't hold.
+    case sessionAlbum(PlaylistManager.SessionAlbum)
 
     var id: UUID {
         switch self {
         case .entity(let entity): return entity.id
         case .playlist(let playlistID): return playlistID
+        case .sessionAlbum(let album): return album.entity.id
         }
     }
 
@@ -25,6 +28,8 @@ enum HomeDetailTarget: Identifiable, Equatable {
         switch (lhs, rhs) {
         case let (.entity(left), .entity(right)): return left.id == right.id
         case let (.playlist(left), .playlist(right)): return left == right
+        case let (.sessionAlbum(left), .sessionAlbum(right)):
+            return left.entity.id == right.entity.id && left.tracks.map(\.url) == right.tracks.map(\.url)
         default: return false
         }
     }
@@ -110,6 +115,23 @@ struct HomeView: View {
                     detailRoleCarrier = nil
                 }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .showHomeDetail)) { notification in
+            guard let target = notification.userInfo?["target"] as? HomeDetailTarget else { return }
+            Task { showDetail(await resolvedAlbum(target)) }
+        }
+    }
+
+    private func showDetail(_ target: HomeDetailTarget) {
+        detailRoleCarrier = nil
+        homeDetail = target
+    }
+
+    /// Go to sends a library album by id alone; swap it for the cached entity, which
+    /// carries the artwork, year and artist the header shows.
+    private func resolvedAlbum(_ target: HomeDetailTarget) async -> HomeDetailTarget {
+        guard case .entity(let album as AlbumEntity) = target, let albumId = album.albumId else { return target }
+        await libraryManager.loadEntitiesAsync()
+        return .entity(libraryManager.cachedAlbumEntities.first { $0.albumId == albumId } ?? album)
     }
 
     // MARK: - Discover View
@@ -122,8 +144,7 @@ struct HomeView: View {
             playlistManager: playlistManager,
             isVisible: isActiveTab
         ) { target in
-            detailRoleCarrier = nil
-            homeDetail = target
+            showDetail(target)
         }
     }
 
@@ -140,6 +161,8 @@ struct HomeView: View {
             )
         case .playlist(let playlistID):
             PlaylistDetailView(playlistID: playlistID) { homeDetail = nil }
+        case .sessionAlbum(let album):
+            EntityDetailView(entity: album.entity, onBack: { homeDetail = nil }, sessionTracks: album.tracks)
         }
     }
     

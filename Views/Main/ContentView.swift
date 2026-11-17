@@ -425,7 +425,8 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var playerControls: some View {
-        if libraryManager.isLocalLibraryReady || !radioManager.stations.isEmpty {
+        // A file opened from Finder can play before any library exists.
+        if libraryManager.isLocalLibraryReady || !radioManager.stations.isEmpty || playbackManager.currentTrack != nil {
             PlayerView(
                 rightSidebarContent: $rightSidebarContent
             )
@@ -650,6 +651,12 @@ extension View {
                     }
                 }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .showHomeDetail)) { _ in
+                // HomeView, kept alive across tabs, opens the detail page itself.
+                withAnimation(.easeInOut(duration: AnimationDuration.standardDuration)) {
+                    selectedTab.wrappedValue = .home
+                }
+            }
             .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ShowTrackInfo"))) { notification in
                 if let track = notification.userInfo?["track"] as? Track {
                     showTrackDetail(track)
@@ -774,6 +781,27 @@ class WindowManager {
     static let shared = WindowManager()
     weak var mainWindow: NSWindow?
     private var hiddenReconciliation: DispatchWorkItem?
+
+    /// Activates the app with the main window in front on the desktop the user is on.
+    /// A window left on another Space is moved over instead of switching the user away;
+    /// a full-screen window keeps its own Space, which activation switches to.
+    func bringMainWindowForward() {
+        // The cooperative activate() is refused while another app is active, which is
+        // the case whenever Finder hands over files; the mini player activates this way too.
+        NSApp.activate(ignoringOtherApps: true)
+        guard let window = mainWindow else { return }
+        if window.isMiniaturized {
+            window.deminiaturize(nil)
+        }
+        guard !window.isOnActiveSpace, !window.styleMask.contains(.fullScreen) else {
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+        let behavior = window.collectionBehavior
+        window.collectionBehavior.insert(.moveToActiveSpace)
+        window.makeKeyAndOrderFront(nil)
+        window.collectionBehavior = behavior
+    }
 
     var hasVisiblePlaybackWindow: Bool {
         guard !NSApp.isHidden else { return false }

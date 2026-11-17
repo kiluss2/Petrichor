@@ -189,6 +189,26 @@ struct PlayQueueContent: View {
     }
 }
 
+// MARK: - Queue Row Menu
+
+/// Observes the playlist manager itself, which the rows don't, so the menu lists
+/// playlists created since the row was last drawn.
+private struct QueueRowMenu: View {
+    @EnvironmentObject private var playlistManager: PlaylistManager
+    let track: Track
+    let position: Int
+    let isCurrentTrack: Bool
+
+    var body: some View {
+        TrackContextMenuContent(items: TrackContextMenu.createQueueMenuItems(
+            for: track,
+            at: position,
+            isCurrentTrack: isCurrentTrack,
+            playlistManager: playlistManager
+        ))
+    }
+}
+
 // MARK: - Queue Row Component
 
 struct PlayQueueRow: View {
@@ -231,6 +251,9 @@ struct PlayQueueRow: View {
             }
         }
         .onTapGesture(count: 2) { handleDoubleClick() }
+        .contextMenu {
+            QueueRowMenu(track: track, position: position, isCurrentTrack: isCurrentTrack)
+        }
     }
 
     private var positionIndicator: some View {

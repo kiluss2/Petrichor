@@ -139,6 +139,17 @@ extension PlaylistManager {
         Logger.info("Remove track from playback queue")
     }
 
+    /// Puts a track at a queue position without changing what plays, clamped to the
+    /// queue's bounds.
+    func insertIntoQueue(_ track: Track, at position: Int) {
+        let index = min(max(position, 0), currentQueue.count)
+        currentQueue.insert(track, at: index)
+        if currentQueueIndex >= 0, index <= currentQueueIndex {
+            currentQueueIndex += 1
+        }
+        audioPlayer?.queueDidInsert(track, at: index)
+    }
+
     /// Drops a row the engine has already discarded, adjusting the cursor. The engine
     /// and mirror are updated by the caller, so this does not notify them back.
     func dropQueueEntry(at index: Int) {

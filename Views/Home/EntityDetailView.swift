@@ -13,6 +13,10 @@ struct EntityDetailView: View {
     let entity: any Entity
     let onBack: (() -> Void)?
     let pinnedItem: PinnedItem?
+    /// Tracks outside the library to show instead of loading them from it: an album made of
+    /// files opened from Finder. Pinning, shuffling and favorites need the library, so they
+    /// are left out, and playing a track moves within the queue the tracks came from.
+    let sessionTracks: [Track]?
 
     @EnvironmentObject var playlistManager: PlaylistManager
     @EnvironmentObject var libraryManager: LibraryManager
@@ -27,10 +31,16 @@ struct EntityDetailView: View {
     @State private var gradientColors: [Color] = []
     @State private var gradientTask: Task<Void, Never>?
 
-    init(entity: any Entity, onBack: (() -> Void)? = nil, pinnedItem: PinnedItem? = nil) {
+    init(
+        entity: any Entity,
+        onBack: (() -> Void)? = nil,
+        pinnedItem: PinnedItem? = nil,
+        sessionTracks: [Track]? = nil
+    ) {
         self.entity = entity
         self.onBack = onBack
         self.pinnedItem = pinnedItem
+        self.sessionTracks = sessionTracks
     }
 
     @AppStorage("useArtworkColors")
@@ -68,12 +78,17 @@ struct EntityDetailView: View {
                     onPlayTrack: { track in
                         playTrack(track)
                     },
-                    contextMenuItems: { track, _ in
-                        TrackContextMenu.createMenuItems(
-                            for: track,
-                            playlistManager: playlistManager,
-                            currentContext: .library
-                        )
+                    contextMenuItems: { selection, _ in
+                        guard isSessionAlbum else {
+                            return TrackContextMenu.createMenuItems(
+                                for: selection,
+                                playlistManager: playlistManager,
+                                currentContext: .library
+                            )
+                        }
+                        // Files outside the library get the player bar's menu, one at a time.
+                        guard selection.count == 1, let track = selection.first else { return [] }
+                        return TrackContextMenu.createPlayerViewMenuItems(for: track, playlistManager: playlistManager)
                     }
                 )
             }
@@ -181,6 +196,10 @@ struct EntityDetailView: View {
         if artworkDeleted { return nil }
         // Synchronous cache read, so the clicked tile's artwork paints on the first pass.
         return overrideArtworkData ?? resolvedArtworkData ?? entity.cachedArtworkData(isDark: colorScheme == .dark)
+    }
+
+    private var isSessionAlbum: Bool {
+        sessionTracks != nil
     }
 
     private var isPersonEntity: Bool {
@@ -379,9 +398,10 @@ struct EntityDetailView: View {
         DetailHeaderControls(
             isPinned: isPinned,
             isPlaybackDisabled: tracks.isEmpty,
-            onTogglePin: pinEntity,
+            // Pinning and shuffling into a new queue need the library.
+            onTogglePin: isSessionAlbum ? nil : pinEntity,
             onPlay: { playEntity() },
-            onShuffle: { playEntity(shuffle: true) }
+            onShuffle: isSessionAlbum ? nil : { playEntity(shuffle: true) }
         )
     }
     
@@ -467,8 +487,10 @@ extension EntityDetailView {
 
         let fetchedTracks: [Track]
 
-        // When pinnedItem is provided, use the unified pinned item track loader
-        if let pinnedItem = pinnedItem {
+        if let sessionTracks {
+            fetchedTracks = sessionTracks
+        } else if let pinnedItem = pinnedItem {
+            // When pinnedItem is provided, use the unified pinned item track loader
             fetchedTracks = libraryManager.databaseManager.getTracksForPinnedItem(pinnedItem)
         } else if entity is ArtistEntity {
             fetchedTracks = libraryManager.databaseManager.getTracksForArtistEntity(entity.name)
@@ -552,11 +574,19 @@ extension EntityDetailView {
     }
 
     private func playTrack(_ track: Track) {
-        playlistManager.playTrack(track, fromTracks: tracks)
+        if isSessionAlbum {
+            playlistManager.playSessionAlbumTrack(track, in: tracks)
+        } else {
+            playlistManager.playTrack(track, fromTracks: tracks)
+        }
     }
 
     private func playEntity(shuffle: Bool = false) {
         guard !tracks.isEmpty else { return }
+        if isSessionAlbum, let first = tracks.first {
+            playTrack(first)
+            return
+        }
 
         NotificationCenter.default.post(
             name: .playEntityTracks,

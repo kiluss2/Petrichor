@@ -209,6 +209,13 @@ struct Track: Identifiable, Equatable, Hashable, FetchableRecord, PersistableRec
 
 extension Track: AudioFormatDescribing {}
 
+extension Track {
+    /// Who the album is credited to: the album artist, or the artist when it isn't tagged.
+    var albumCredit: String {
+        albumArtist?.nilIfEmpty ?? artist
+    }
+}
+
 // MARK: - Helper Methods
 
 extension Track {

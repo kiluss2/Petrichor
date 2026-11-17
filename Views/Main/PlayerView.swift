@@ -162,16 +162,17 @@ struct PlayerView: View {
 
             PlayerAlbumArtView(
                 trackInfo: trackArtworkInfo,
-                contextMenuItems: currentTrackContextMenuItems
-            ) {
-                if let currentTrack = playbackManager.currentTrack {
-                    NotificationCenter.default.post(
-                        name: NSNotification.Name("ShowTrackInfo"),
-                        object: nil,
-                        userInfo: ["track": currentTrack]
-                    )
+                contextMenuItems: { currentTrackContextMenuItems },
+                onTap: {
+                    if let currentTrack = playbackManager.currentTrack {
+                        NotificationCenter.default.post(
+                            name: NSNotification.Name("ShowTrackInfo"),
+                            object: nil,
+                            userInfo: ["track": currentTrack]
+                        )
+                    }
                 }
-            }
+            )
             .equatable()
         }
     }
@@ -189,7 +190,7 @@ struct PlayerView: View {
         } else {
             PlayerTrackDetailsView(
                 track: playbackManager.currentTrack,
-                contextMenuItems: currentTrackContextMenuItems,
+                contextMenuItems: { currentTrackContextMenuItems },
                 playlistManager: playlistManager,
                 showTechnicalInfo: showTrackTechnicalInfo
             )
@@ -555,7 +556,8 @@ struct PlayerView: View {
 
 struct PlayerTrackDetailsView: View, Equatable {
     let track: Track?
-    let contextMenuItems: [ContextMenuItem]
+    /// Called only when a menu opens: building it can query the library.
+    let contextMenuItems: () -> [ContextMenuItem]
     let playlistManager: PlaylistManager
     let showTechnicalInfo: Bool
 
@@ -585,10 +587,11 @@ struct PlayerTrackDetailsView: View, Equatable {
                     .truncationMode(.tail)
                     .help(track?.title ?? "")
                     .contextMenu {
-                        TrackContextMenuContent(items: contextMenuItems)
+                        DeferredTrackContextMenu(items: contextMenuItems)
                     }
 
-                if let track = track {
+                // A track opened from Finder for the session only has no library row to favorite.
+                if let track, track.trackId != nil {
                     FavoriteButtonView(
                         trackId: track.id,
                         isFavorite: track.isFavorite
@@ -607,7 +610,7 @@ struct PlayerTrackDetailsView: View, Equatable {
             .frame(height: textRowHeight)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contextMenu {
-                TrackContextMenuContent(items: contextMenuItems)
+                DeferredTrackContextMenu(items: contextMenuItems)
             }
 
             // Album with marquee
@@ -619,7 +622,7 @@ struct PlayerTrackDetailsView: View, Equatable {
             .frame(height: textRowHeight)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contextMenu {
-                TrackContextMenuContent(items: contextMenuItems)
+                DeferredTrackContextMenu(items: contextMenuItems)
             }
 
             if showTechnicalInfo {
@@ -710,7 +713,8 @@ struct TrackArtworkInfo: Equatable {
 
 struct PlayerAlbumArtView: View, Equatable {
     let trackInfo: TrackArtworkInfo?
-    let contextMenuItems: [ContextMenuItem]
+    /// Called only when a menu opens: building it can query the library.
+    let contextMenuItems: () -> [ContextMenuItem]
     let onTap: (() -> Void)?
 
     static func == (lhs: PlayerAlbumArtView, rhs: PlayerAlbumArtView) -> Bool {
@@ -723,7 +727,7 @@ struct PlayerAlbumArtView: View, Equatable {
                 onTap?()
             }
             .contextMenu {
-                TrackContextMenuContent(items: contextMenuItems)
+                DeferredTrackContextMenu(items: contextMenuItems)
             }
     }
 }

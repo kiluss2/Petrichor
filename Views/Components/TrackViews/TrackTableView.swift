@@ -889,6 +889,9 @@ private struct FavoriteButtonCell: View {
                 .foregroundColor(isFavorite ? .yellow : .secondary)
         })
         .buttonStyle(.plain)
+        // A file opened from Finder has no library row to favorite.
+        .opacity(track.trackId == nil ? 0 : 1)
+        .disabled(track.trackId == nil)
     }
 }
 

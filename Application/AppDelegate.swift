@@ -10,11 +10,51 @@ import Sparkle
 
 class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     internal var updaterController: SPUStandardUpdaterController?
+
+    /// Files from open events still being collected into one batch.
+    private var pendingOpenedFiles: [URL] = []
+    private var openedFilesBatchTask: Task<Void, Never>?
     
     func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls {
+        // Files arrive from Finder's "Open With" or a drop on the Dock icon; the
+        // rest are callbacks on the app's URL scheme.
+        let fileURLs = urls.filter(\.isFileURL)
+        if !fileURLs.isEmpty {
+            enqueueOpenedFiles(fileURLs)
+        }
+
+        for url in urls where !url.isFileURL {
             URLSchemeHandler.handle(url)
         }
+    }
+
+    /// Finder can deliver one selection as several open events a moment apart. They are
+    /// played as one batch, or each would replace the queue the one before it started.
+    private func enqueueOpenedFiles(_ urls: [URL]) {
+        if pendingOpenedFiles.isEmpty {
+            openMainWindowIfNeeded()
+            // Now, while the open event lets the app activate: by the time the batch has
+            // been read the system may no longer bring it forward.
+            WindowManager.shared.bringMainWindowForward()
+        }
+        pendingOpenedFiles += urls
+
+        openedFilesBatchTask?.cancel()
+        openedFilesBatchTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(300))
+            guard let self, !Task.isCancelled else { return }
+            let batch = self.pendingOpenedFiles
+            self.pendingOpenedFiles = []
+            AppCoordinator.shared?.playlistManager.playOpenedFiles(batch)
+        }
+    }
+
+    /// A launch that opens files skips SwiftUI's initial window, and the main scene only
+    /// handles "main" events so a running app doesn't get a new window per file. Asks
+    /// SwiftUI's delegate, which wraps this one, for its untitled window instead.
+    private func openMainWindowIfNeeded() {
+        guard WindowManager.shared.mainWindow == nil else { return }
+        _ = NSApp.delegate?.applicationOpenUntitledFile?(NSApp)
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {

@@ -76,7 +76,7 @@ struct BulkExportResult {
     }
 }
 
-private enum M3UFormat {
+enum M3UFormat {
     static let header = "#EXTM3U"
     static let infoPrefix = "#EXTINF:"
     static let commentPrefix = "#"
@@ -116,10 +116,7 @@ extension PlaylistManager {
         let basePlaylistName = url.deletingPathExtension().lastPathComponent
         let sourceDirectory = url.deletingLastPathComponent()
         
-        let fileContent = (try? String(contentsOf: url, encoding: .utf8)) ??
-                          (try? String(contentsOf: url, encoding: .isoLatin1))
-        
-        guard let content = fileContent else {
+        guard let content = readM3UContent(from: url) else {
             Logger.error("Failed to read '\(url.lastPathComponent)' (tried UTF-8 and Latin-1)")
             return PlaylistImportResult(
                 playlistName: basePlaylistName,
@@ -144,7 +141,8 @@ extension PlaylistManager {
         usedNames: Set<String>,
         sourceDirectory: URL? = nil
     ) async -> PlaylistImportResult {
-        let trackPaths = parseM3UContent(content)
+        let entries = M3UTrackMatcher.parseEntries(content)
+        let trackPaths = entries.map(\.location)
         
         guard !trackPaths.isEmpty else {
             Logger.error("Empty M3U file: \(playlistName)")
@@ -158,7 +156,7 @@ extension PlaylistManager {
         }
         
         let matchResult = await matchTracksToLibrary(
-            trackPaths: trackPaths,
+            entries: entries,
             sourceDirectory: sourceDirectory
         )
         
@@ -204,61 +202,123 @@ extension PlaylistManager {
         )
     }
     
-    private func parseM3UContent(_ content: String) -> [String] {
-        content.components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty && !$0.hasPrefix(M3UFormat.commentPrefix) }
+    /// Reads a playlist file, falling back to Latin-1 for files that aren't valid UTF-8.
+    func readM3UContent(from url: URL) -> String? {
+        (try? String(contentsOf: url, encoding: .utf8)) ?? (try? String(contentsOf: url, encoding: .isoLatin1))
     }
-    
+
+    /// Library tracks for each entry, in playlist order: by path, then by file name, then
+    /// by `M3UTrackMatcher` among the tracks in the folder the entry points to, for files
+    /// renamed since the playlist was written.
     private func matchTracksToLibrary(
-        trackPaths: [String],
+        entries: [M3UTrackMatcher.Entry],
         sourceDirectory: URL? = nil
     ) async -> (matchedTracks: [Track], unmatchedPaths: [String]) {
         guard let dbManager = libraryManager?.databaseManager else {
-            return ([], trackPaths)
+            return ([], entries.map(\.location))
         }
-        
-        var matchedTracks: [Track] = []
-        var unmatchedPaths: [String] = []
-        
-        for originalPath in trackPaths {
-            let pathVariations = generatePathVariations(originalPath, sourceDirectory: sourceDirectory)
-            
-            var matched = false
-            for path in pathVariations {
+
+        var matches: [Track?] = Array(repeating: nil, count: entries.count)
+        let variations = entries.map { generatePathVariations($0.location, sourceDirectory: sourceDirectory) }
+
+        for index in entries.indices {
+            for path in variations[index] {
                 if let track = await dbManager.findTrackByPath(path) {
-                    matchedTracks.append(track)
-                    matched = true
+                    matches[index] = track
                     break
                 }
             }
-            
-            if !matched {
-                unmatchedPaths.append(originalPath)
-            }
         }
-        
-        if !unmatchedPaths.isEmpty {
-            let filenames = unmatchedPaths.map { ($0 as NSString).lastPathComponent }
+
+        let byPath = matches.indices.filter { matches[$0] == nil }
+        if !byPath.isEmpty {
+            let filenames = byPath.map { (entries[$0].location as NSString).lastPathComponent }
             let filenameMap = await dbManager.findTracksByFilenames(filenames)
-            
-            var stillUnmatched: [String] = []
-            for path in unmatchedPaths {
-                let filename = (path as NSString).lastPathComponent.lowercased()
-                if let track = filenameMap[filename] {
-                    matchedTracks.append(track)
-                } else {
-                    stillUnmatched.append(path)
-                }
+            for index in byPath {
+                matches[index] = filenameMap[(entries[index].location as NSString).lastPathComponent.lowercased()]
             }
-            unmatchedPaths = stillUnmatched
         }
-        
-        return (matchedTracks, unmatchedPaths)
+
+        await matchRenamedLibraryTracks(entries: entries, variations: variations, matches: &matches)
+
+        let unmatchedPaths = entries.indices.filter { matches[$0] == nil }.map { entries[$0].location }
+        return (matches.compactMap { $0 }, unmatchedPaths)
+    }
+
+    /// Matches the remaining entries against the library tracks in the folder each one
+    /// points to or, when the library has no such folder, in the one library folder whose
+    /// path ends the same way (an album that moved to another drive or root). Names such as
+    /// "Disc 1" that several folders share are compared with their parent, and skipped
+    /// when that still leaves more than one folder.
+    private func matchRenamedLibraryTracks(
+        entries: [M3UTrackMatcher.Entry],
+        variations: [[String]],
+        matches: inout [Track?]
+    ) async {
+        let unresolved = matches.indices.filter { matches[$0] == nil }
+        guard !unresolved.isEmpty, let library = libraryManager else { return }
+
+        let databaseManager = library.databaseManager
+        let libraryTracks = await Task.detached { databaseManager.tracksForMatching() }.value
+        let taken = Set(matches.compactMap { $0?.trackId })
+        var tracksByFolder: [String: [Track]] = [:]
+        for track in libraryTracks where !taken.contains(track.trackId ?? -1) {
+            tracksByFolder[track.url.deletingLastPathComponent().path.lowercased(), default: []].append(track)
+        }
+        let libraryFolders = Array(tracksByFolder.keys)
+
+        var entriesByFolder: [String: [Int]] = [:]
+        for index in unresolved {
+            guard let path = variations[index].first else { continue }
+            let folder = (path as NSString).deletingLastPathComponent
+            entriesByFolder[folder, default: []].append(index)
+        }
+
+        for (folder, entryIndexes) in entriesByFolder {
+            let libraryFolder = tracksByFolder[folder.lowercased()] != nil
+                ? folder.lowercased()
+                : Self.libraryFolder(endingLike: folder, in: libraryFolders)
+            guard let libraryFolder, let candidates = tracksByFolder[libraryFolder] else { continue }
+
+            let pairs = M3UTrackMatcher.match(
+                entryIndexes.map { entries[$0] },
+                to: candidates.map {
+                    M3UTrackMatcher.Candidate(
+                        filename: $0.filename,
+                        title: $0.title,
+                        trackNumber: $0.trackNumber,
+                        discNumber: $0.discNumber,
+                        duration: $0.duration
+                    )
+                }
+            )
+            for (position, candidateIndex) in pairs {
+                matches[entryIndexes[position]] = candidates[candidateIndex]
+            }
+            if !pairs.isEmpty {
+                Logger.info("Matched \(pairs.count) renamed playlist entries in '\(folder)' by tags")
+            }
+        }
     }
     
+    /// The single library folder whose last two path components, or else whose name, match
+    /// those of `folder`; nil when none or several do.
+    private static func libraryFolder(endingLike folder: String, in libraryFolders: [String]) -> String? {
+        func suffix(_ path: String, _ count: Int) -> [Substring] {
+            path.lowercased().split(separator: "/").suffix(count)
+        }
+        for count in [2, 1] {
+            let wanted = suffix(folder, count)
+            guard wanted.count == count else { continue }
+            let hits = libraryFolders.filter { suffix($0, count) == wanted }
+            if hits.count == 1 { return hits[0] }
+            if hits.count > 1 { return nil }
+        }
+        return nil
+    }
+
     /// Generates possible path variations for M3U import matching
-    private func generatePathVariations(_ path: String, sourceDirectory: URL? = nil) -> [String] {
+    func generatePathVariations(_ path: String, sourceDirectory: URL? = nil) -> [String] {
         var normalized = path
         
         for scheme in ["file://", "smb://", "afp://", "nfs://"] where normalized.lowercased().hasPrefix(scheme) {

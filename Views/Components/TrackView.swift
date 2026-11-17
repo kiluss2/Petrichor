@@ -56,6 +56,16 @@ struct TrackView: View {
 }
 
 // MARK: - Track Context Menu
+/// Builds its items when the menu is presented: a `View`'s initializer runs on every
+/// redraw of the view it is attached to, its `body` only when the menu opens.
+struct DeferredTrackContextMenu: View {
+    let items: () -> [ContextMenuItem]
+
+    var body: some View {
+        TrackContextMenuContent(items: items())
+    }
+}
+
 struct TrackContextMenuContent: View {
     let items: [ContextMenuItem]
 

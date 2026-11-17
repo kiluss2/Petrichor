@@ -420,9 +420,11 @@ private struct TrackListRow: View {
             Image(systemName: isFavorite ? Icons.starFill : Icons.star)
                 .font(.system(size: 11))
                 .foregroundStyle(isFavorite ? Color.yellow : secondaryTextColor)
-                .opacity(isFavorite || isHovering ? 1 : 0)
+                .opacity(track.trackId != nil && (isFavorite || isHovering) ? 1 : 0)
         }
         .buttonStyle(.plain)
+        // A file opened from Finder has no library row to favorite.
+        .disabled(track.trackId == nil)
         .frame(width: 14)
         .help(isFavorite
             ? String(localized: "Remove from Favorites")

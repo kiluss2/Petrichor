@@ -101,11 +101,9 @@ extension PlaylistManager {
     /// Update play count for a track
     func incrementPlayCount(for track: Track) {
         Task {
-            guard let trackId = track.trackId else {
-                Logger.error("Cannot update play count - track has no database ID")
-                return
-            }
-            
+            // Files opened from Finder play for the session only and have no row to update.
+            guard let trackId = track.trackId else { return }
+
             guard let dbManager = libraryManager?.databaseManager else {
                 Logger.error("Cannot update play count - no database manager")
                 return
